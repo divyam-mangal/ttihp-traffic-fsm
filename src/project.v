@@ -1,3 +1,5 @@
+
+
 `default_nettype none
 
 module tt_um_traffic_light (
@@ -5,67 +7,92 @@ module tt_um_traffic_light (
     output wire [7:0] uo_out,   // Dedicated outputs
     input  wire [7:0] uio_in,   // IOs: Input path
     output wire [7:0] uio_out,  // IOs: Output path
-    output wire [7:0] uio_oe,   // IOs: Enable path (active high: 0=input, 1=output)
-    input  wire       ena,      // always 1 when the design is powered
+    output wire [7:0] uio_oe,   // IOs: Enable path (1=output)
+    input  wire       ena,      // always 1 when design is powered
     input  wire       clk,      // clock
     input  wire       rst_n     // reset_n - low to reset
 );
 
-    // Disable bidirectional IOs as we don't need them for this project
-    assign uio_out = 8'b0;
-    assign uio_oe  = 8'b0;
+  
+  wire reset = !rst_n;
+  wire sensor = ui_in[0];       // Traffic sensor input
+  
+  
+  localparam S_GREEN  = 2'b00;
+  localparam S_YELLOW = 2'b01;
+  localparam S_RED    = 2'b10;
+  
+  
+  localparam GREEN_TIME  = 4'd10;
+  localparam YELLOW_TIME = 4'd3;
+  localparam RED_TIME    = 4'd10;
+  
 
-    // FSM State Encoding
-    localparam S_NS_G_EW_R = 2'b00;
-    localparam S_NS_Y_EW_R = 2'b01;
-    localparam S_NS_R_EW_G = 2'b10;
-    localparam S_NS_R_EW_Y = 2'b11;
+  reg [1:0] state, next_state;
+  reg [3:0] timer;
+  
 
-    reg [1:0] state;
-    reg [25:0] counter; // 26-bit counter to create a visible delay
-
-    // Output logic (Combinational)
-    // Bit mapping: {Empty, Empty, EW_Green, EW_Yellow, EW_Red, NS_Green, NS_Yellow, NS_Red}
-    reg [5:0] lights;
-    
-    // Assign the lower 6 bits of uo_out to our lights, tie top 2 bits to 0
-    assign uo_out = {2'b00, lights};
-
-    always @(*) begin
-        case(state)
-            // lights = {EW_G, EW_Y, EW_R, NS_G, NS_Y, NS_R}
-            S_NS_G_EW_R: lights = 6'b001_100; // EW Red (bit 3), NS Green (bit 2)
-            S_NS_Y_EW_R: lights = 6'b001_010; // EW Red (bit 3), NS Yellow (bit 1)
-            S_NS_R_EW_G: lights = 6'b100_001; // EW Green (bit 5), NS Red (bit 0)
-            S_NS_R_EW_Y: lights = 6'b010_001; // EW Yellow (bit 4), NS Red (bit 0)
-            default:     lights = 6'b001_001; // Default to Red/Red for safety
+  always @(posedge clk or posedge reset) begin
+    if (reset) begin
+      state <= S_RED;
+      timer <= RED_TIME;
+    end else begin
+      state <= next_state;
+      if (state != next_state) begin
+        // Reset timer on state change
+        case (next_state)
+          S_GREEN:  timer <= GREEN_TIME;
+          S_YELLOW: timer <= YELLOW_TIME;
+          S_RED:    timer <= RED_TIME;
+          default:  timer <= RED_TIME;
         endcase
+      end else if (timer > 0) begin
+        timer <= timer - 1;
+      end
     end
+  end
+  
+  
+  always @(*) begin
+    next_state = state;
+    case (state)
+      S_GREEN: begin
+        if (timer == 0)
+          next_state = S_YELLOW;
+      end
+      S_YELLOW: begin
+        if (timer == 0)
+          next_state = S_RED;
+      end
+      S_RED: begin
+        if (timer == 0 && sensor)
+          next_state = S_GREEN;
+        else if (timer == 0)
+          next_state = S_GREEN;  // Auto-cycle if no sensor
+      end
+      default: next_state = S_RED;
+    endcase
+  end
+  
 
-    // State Transitions and Counter (Sequential)
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            state   <= S_NS_G_EW_R;
-            counter <= 0;
-        end else begin
-            counter <= counter + 1;
+  reg [7:0] light_out;
+  
+  always @(*) begin
+    case (state)
+      S_GREEN:  light_out = 8'b00_100_001;  // Main=Green, Side=Red
+      S_YELLOW: light_out = 8'b00_100_010;  // Main=Yellow, Side=Red
+      S_RED:    light_out = 8'b00_001_100;  // Main=Red, Side=Green
+      default:  light_out = 8'b00_100_100;  // Both Red (safe state)
+    endcase
+  end
+  
+  assign uo_out = light_out;
+  
+  
+  assign uio_out = {4'b0, timer};
+  assign uio_oe  = 8'b00001111;  // Lower 4 bits as outputs
+  
 
-            // Timer thresholds. Assuming a fast clock (e.g., 10-50MHz), 
-            // these large numbers divide the clock to create a multi-second delay.
-            if (state == S_NS_G_EW_R && counter == 26'd20_000_000) begin
-                state <= S_NS_Y_EW_R;
-                counter <= 0;
-            end else if (state == S_NS_Y_EW_R && counter == 26'd5_000_000) begin
-                state <= S_NS_R_EW_G;
-                counter <= 0;
-            end else if (state == S_NS_R_EW_G && counter == 26'd20_000_000) begin
-                state <= S_NS_R_EW_Y;
-                counter <= 0;
-            end else if (state == S_NS_R_EW_Y && counter == 26'd5_000_000) begin
-                state <= S_NS_G_EW_R;
-                counter <= 0;
-            end
-        end
-    end
+  wire _unused = &{ena, ui_in[7:1], uio_in, 1'b0};
 
 endmodule
