@@ -1,20 +1,16 @@
 `default_nettype none
 `timescale 1ns / 1ps
-
-/* This testbench just instantiates the module and makes some convenient wires
-   that can be driven / tested by the cocotb test.py.
-*/
 module tb ();
-
-  // Dump the signals to a FST file. You can view it with gtkwave or surfer.
   initial begin
-    $dumpfile("tb.fst");
+    $dumpfile("tb.vcd");
     $dumpvars(0, tb);
     #1;
   end
-
-  // Wire up the inputs and outputs:
   reg clk;
+  initial begin
+    clk = 0;
+    forever #5 clk = ~clk;
+  end
   reg rst_n;
   reg ena;
   reg [7:0] ui_in;
@@ -22,21 +18,57 @@ module tb ();
   wire [7:0] uo_out;
   wire [7:0] uio_out;
   wire [7:0] uio_oe;
-
-  // Replace tt_um_example with your module name:
-  tt_um_traffic_light (
-      `ifdef GL_TEST
-            .vccd1( 1'b1),
-            .vssd1( 1'b0),
-        `endif
-        .ui_in  (ui_in),
-        .uo_out (uo_out),
-        .uio_in (uio_in),
-        .uio_out(uio_out),
-        .uio_oe (uio_oe),
-        .ena    (ena),
-        .clk    (clk),
-        .rst_n  (rst_n)
+  tt_um_traffic_light dut (
+      .ui_in  (ui_in),
+      .uo_out (uo_out),
+      .uio_in (uio_in),
+      .uio_out(uio_out),
+      .uio_oe (uio_oe),
+      .ena    (ena),
+      .clk    (clk),
+      .rst_n  (rst_n)
   );
-
+  task display_state;
+    begin
+      $display("Time=%0t | State=%b | Main={R=%b,Y=%b,G=%b} | Side={R=%b,Y=%b,G=%b} | Timer=%d",
+               $time,
+               dut.state,
+               uo_out[2], uo_out[1], uo_out[0],
+               uo_out[5], uo_out[4], uo_out[3],
+               uio_out[3:0]);
+    end
+  endtask
+  initial begin
+    rst_n = 0;
+    ena = 1;
+    ui_in = 8'b0;
+    uio_in = 8'b0;
+    $display("=== Traffic Light FSM Simulation ===");
+    $display("");
+    $display("Applying reset...");
+    #20;
+    rst_n = 1;
+    #10;
+    display_state();
+    $display("");
+    $display("Running traffic light cycles...");
+    repeat (100) begin
+      @(posedge clk);
+      #1;
+      if (dut.timer == 0 || $time < 100)
+        display_state();
+    end
+    $display("");
+    $display("Testing sensor input...");
+    ui_in[0] = 1;
+    repeat (50) begin
+      @(posedge clk);
+      #1;
+      if (dut.timer == 0)
+        display_state();
+    end
+    $display("");
+    $display("=== Simulation Complete ===");
+    $finish;
+  end
 endmodule
